@@ -2,6 +2,7 @@
 
 ## Autorzy
 - Grzegorz Nowakowski
+- izmael7
 
 ## Opis
 Od zawsze chcieliśmy napisać grę komputerową.
