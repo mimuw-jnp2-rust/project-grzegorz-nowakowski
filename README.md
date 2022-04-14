@@ -1,8 +1,7 @@
 # Frobnicator
 
 ## Autorzy
-- Andrzej Głuszak (gr 9, @agluszak na githubie)
-- Linus Torvalds (Uniwersytet Helsiński, @torvalds na githubie)
+- Grzegorz Nowakowski
 
 ## Opis
 Od zawsze chcieliśmy napisać grę komputerową.
