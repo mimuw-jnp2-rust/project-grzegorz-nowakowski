@@ -2,6 +2,7 @@ use chrono::*;
 use colored::*;
 use futures::lock::Mutex;
 use serde_json::*;
+use tokio::net::tcp::WriteHalf;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -12,7 +13,35 @@ use tokio::sync::broadcast;
 
 type Db = Arc<Mutex<HashMap<String, SocketAddr>>>;
 
-const MESSAGE_MAX_SIZE: usize = 512;
+//const MESSAGE_MAX_SIZE: usize = 512;
+
+#[derive(Debug, Clone)]
+enum ChatMessageStyle {
+    User = 0,
+    Yourself = 1,
+    Admin = 2,
+    Server = 3,
+}
+
+#[derive(Debug, Clone)]
+struct ChatMessage {
+    timestamp: i64,
+    sender: String,
+    style: ChatMessageStyle,
+    text: String,    
+}
+
+async fn send_message(data: ChatMessage, s: &mut WriteHalf<'_>) {
+    let data_json = json!({
+        "timestamp": data.timestamp,
+        "sender": data.sender,
+        "style": data.style as u8,
+        "text": data.text
+    }).to_string();
+
+    let header: [u8; 2] = (data_json.len() as u16).to_be_bytes();
+    s.write_all(&[&header, data_json.as_bytes()].concat()).await.unwrap();
+} 
 
 #[tokio::main]
 async fn main() {
@@ -76,13 +105,13 @@ async fn main() {
                             db.insert(nick.to_string(), addr);
                             username = nick.to_string();
 
-                            let message = json!({
-                                "user": "Server",
-                                "timestamp": Utc::now().timestamp(),
-                                "style": 3,
-                                "text": format!("{} joined the chat!", username)
-                            });
-                            tx.send((message.to_string(), addr)).unwrap();
+                            let message = ChatMessage {
+                                timestamp: Utc::now().timestamp(),
+                                sender: "Server".to_string(),
+                                style: ChatMessageStyle::Server,
+                                text: [nick.as_str(), "joined chat"].join(" ")
+                            };
+                            tx.send((message, addr)).unwrap();
                         }
                     }
                 }
@@ -98,23 +127,22 @@ async fn main() {
                             break;
                         }
                         // Wysyłamy wiadomość jako JSON, który będzie odpowiednio formatowany przez klienta.
-                        let message = json!({
-                            "user": username,
-                            "timestamp": Utc::now().timestamp(),
-                            "style": 0,
-                            "text": line.clone().trim()
-                        });
+                        let message = ChatMessage {
+                            timestamp: Utc::now().timestamp(),
+                            sender: username.clone(),
+                            style: ChatMessageStyle::User,
+                            text: line.clone().trim().to_string()
+                        };
 
-                        if message.to_string().len() < MESSAGE_MAX_SIZE {
-                            tx.send((message.to_string(), addr)).unwrap();
-                        }
+                        tx.send((message, addr)).unwrap();
                         line.clear();
                     }
                     result = rx.recv() => {
-                        let (msg, _addr) = result.unwrap();
-                        let mut buff = msg.into_bytes();
-                        buff.resize(MESSAGE_MAX_SIZE, 0b0);
-                        writer.write_all( &buff).await.unwrap();
+                        let (mut msg, _addr) = result.unwrap();
+                        if msg.sender == username {
+                            msg.style = ChatMessageStyle::Yourself
+                        }
+                        send_message(msg, &mut writer).await
                     }
                 }
             }

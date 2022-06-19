@@ -31,7 +31,7 @@ use unicode_width::UnicodeWidthStr;
 const MESSAGE_MAX_LENGTH: u8 = 64;
 const MESSAGE_MAX_SIZE: usize = 512;
 //                                FPS
-const MIN_FRAMETIME: i64 = ((1.0 / 60.0) * 1000.0) as i64;
+const MIN_UI_FRAMETIME: i64 = ((1.0 / 60.0) * 1000.0) as i64;
 
 struct Message {
     timestamp: i64,
@@ -165,31 +165,45 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
     loop {
 
         let now = Utc::now().timestamp_millis();
-        if (now - last_ui_update) > MIN_FRAMETIME {
+        if (now - last_ui_update) > MIN_UI_FRAMETIME {
             terminal.draw(|f| ui(f, &mut chat))?;
             last_ui_update = now;
         }
 
-        let mut buff = vec![0_u8; MESSAGE_MAX_SIZE];
+        let mut buff: [u8; 2] = [0, 0];
+
         if stream.read_exact(&mut buff).is_ok() {
-            let data = from_utf8(&buff)
+            let message_size = u16::from_be_bytes(buff);
+            /*let data = from_utf8(&buff)
                 .expect("Received invalid UTF-8")
                 .trim_matches(char::from(0));
             let json_data: Value = from_str(data).expect("Received invalid data");
+            */
+            let mut message_bytes = vec![0_u8; message_size.into()];
 
-            let mut msg = Message {
-                timestamp: json_data["timestamp"].as_i64().unwrap(),
-                sender: json_data["user"].as_str().unwrap().to_string(),
-                text: json_data["text"].as_str().unwrap().to_string(),
-                style: json_data["style"].as_i64().unwrap(),
-            };
+            if stream.read_exact(&mut message_bytes).is_ok() {
+                let message_json = from_utf8(&message_bytes)
+                    .expect("Received invalid UTF-8")
+                    .trim_matches(char::from(0));
+                
+                let json_data: Value = from_str(message_json)
+                    .expect("Received invalid data");
 
-            if msg.sender.eq(username.trim()) {
-                msg.style = 1;
+                let mut msg = Message {
+                    timestamp: json_data["timestamp"].as_i64().unwrap(),
+                    sender: json_data["sender"].as_str().unwrap().to_string(),
+                    text: json_data["text"].as_str().unwrap().to_string(),
+                    style: json_data["style"].as_i64().unwrap(),
+                };
+
+                if msg.sender.eq(username.trim()) {
+                    msg.style = 1;
+                }
+                //
+                chat.log.push(msg);
             }
-            //
-            chat.log.push(msg);
         }
+        
         match rx.try_recv() {
             Ok(mut data) => {
                 data.push('\n');
