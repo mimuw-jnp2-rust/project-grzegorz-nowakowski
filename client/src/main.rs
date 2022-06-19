@@ -14,7 +14,7 @@ use std::{
     net::*,
     str::from_utf8,
     sync::mpsc::{self, TryRecvError},
-    time::Duration,
+    time::Duration, fmt::format,
 };
 
 use chrono::prelude::*;
@@ -30,6 +30,8 @@ use unicode_width::UnicodeWidthStr;
 
 const MESSAGE_MAX_LENGTH: u8 = 64;
 const MESSAGE_MAX_SIZE: usize = 512;
+//                                FPS
+const MIN_FRAMETIME: i64 = ((1.0 / 60.0) * 1000.0) as i64;
 
 struct Message {
     timestamp: i64,
@@ -157,10 +159,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
         .expect("Unable to set stream as non-blocking");
 
     let (tx, rx) = mpsc::channel::<String>();
+    let mut last_ui_update: i64 = 0;
 
     // glowny loop chatu
     loop {
-        terminal.draw(|f| ui(f, &mut chat))?;
+
+        let now = Utc::now().timestamp_millis();
+        if (now - last_ui_update) > MIN_FRAMETIME {
+            terminal.draw(|f| ui(f, &mut chat))?;
+            last_ui_update = now;
+        }
 
         let mut buff = vec![0_u8; MESSAGE_MAX_SIZE];
         if stream.read_exact(&mut buff).is_ok() {
@@ -248,6 +256,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
                 }
             }
         }
+
     }
 }
 
@@ -305,13 +314,10 @@ fn ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
         })
         .collect();
 
-    // cały ten blok do optymalizacji (dodac przewijanie wiadomosci?)
     let mut log_capacity = chunks[0].height - 2;
-    log_capacity = log_capacity.clamp(1, 24);
-    if chat.log.len() > log_capacity.into() {
+    while chat.log.len() > log_capacity.into() {
         chat.log.remove(0); // O(n)
     }
-    //
 
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Chat log"));
