@@ -1,19 +1,18 @@
 use chrono::*;
-use colored::*;
+use colored::Colorize;
 use futures::lock::Mutex;
 use serde_json::*;
-use tokio::net::tcp::WriteHalf;
 use std::collections::HashMap;
+use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::net::tcp::WriteHalf;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 //use openssl::rsa::*; TODO szyfrowanie
 
 type Db = Arc<Mutex<HashMap<String, SocketAddr>>>;
-
-//const MESSAGE_MAX_SIZE: usize = 512;
 
 #[derive(Debug, Clone)]
 enum ChatMessageStyle {
@@ -28,7 +27,25 @@ struct ChatMessage {
     timestamp: i64,
     sender: String,
     style: ChatMessageStyle,
-    text: String,    
+    text: String,
+}
+
+enum MessageType {
+    Hello = 0,
+    HelloAgain = 1,
+    UserExists = 2,
+    HiNewComer = 3,
+}
+
+impl MessageType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            MessageType::Hello => "HELLO",
+            MessageType::HelloAgain => "HELLOAGAIN",
+            MessageType::UserExists => "USEREXISTS",
+            MessageType::HiNewComer => "HINEWCOMER",
+        }
+    }
 }
 
 async fn send_message(data: ChatMessage, s: &mut WriteHalf<'_>) {
@@ -37,15 +54,32 @@ async fn send_message(data: ChatMessage, s: &mut WriteHalf<'_>) {
         "sender": data.sender,
         "style": data.style as u8,
         "text": data.text
-    }).to_string();
+    })
+    .to_string();
+
+    if data_json.len() > 65535 {
+        println!("Wiadomość za długa");
+        return;
+    }
 
     let header: [u8; 2] = (data_json.len() as u16).to_be_bytes();
-    s.write_all(&[&header, data_json.as_bytes()].concat()).await.unwrap();
-} 
+    s.write_all(&[&header, data_json.as_bytes()].concat())
+        .await
+        .unwrap();
+}
 
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("localhost:2115").await.unwrap();
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() != 2 {
+        println!("Usage: <port>");
+        return;
+    }
+
+    let mut host: String = "localhost:".to_owned();
+    host.push_str(&args[1]);
+    let listener = TcpListener::bind(host).await.unwrap();
 
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
 
@@ -66,7 +100,10 @@ async fn main() {
             let mut username: String = String::new();
 
             // Dodaj nowego użytkownika.
-            writer.write_all("HELLO".as_bytes()).await.unwrap();
+            writer
+                .write_all(MessageType::Hello.as_str().as_bytes())
+                .await
+                .unwrap();
 
             match reader.read_line(&mut line).await.unwrap() {
                 0 => return,
@@ -79,10 +116,16 @@ async fn main() {
                     match db.contains_key(nick.as_str()) {
                         true => {
                             if db.get(nick.as_str()).unwrap().ip() == addr.ip() {
-                                writer.write_all("HELLOAGAIN".as_bytes()).await.unwrap();
+                                writer
+                                    .write_all(MessageType::HelloAgain.as_str().as_bytes())
+                                    .await
+                                    .unwrap();
                                 username = nick.to_string();
                             } else {
-                                writer.write_all("USEREXISTS".as_bytes()).await.unwrap();
+                                writer
+                                    .write_all(MessageType::UserExists.as_str().as_bytes())
+                                    .await
+                                    .unwrap();
 
                                 println!(
                                     "{} {} {}",
@@ -94,7 +137,10 @@ async fn main() {
                             }
                         }
                         false => {
-                            writer.write_all("HINEWCOMER".as_bytes()).await.unwrap();
+                            writer
+                                .write_all(MessageType::HiNewComer.as_str().as_bytes())
+                                .await
+                                .unwrap();
 
                             println!(
                                 "{} {} {}",
@@ -109,7 +155,7 @@ async fn main() {
                                 timestamp: Utc::now().timestamp(),
                                 sender: "Server".to_string(),
                                 style: ChatMessageStyle::Server,
-                                text: [nick.as_str(), "joined chat"].join(" ")
+                                text: [nick.as_str(), "joined chat"].join(" "),
                             };
                             tx.send((message, addr)).unwrap();
                         }
