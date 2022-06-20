@@ -5,6 +5,7 @@ use crossterm::{
     style::Stylize,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use num_derive::FromPrimitive;
 use serde_json::{from_str, Value};
 
 use std::{
@@ -14,7 +15,7 @@ use std::{
     net::*,
     str::from_utf8,
     sync::mpsc::{self, TryRecvError},
-    time::Duration, fmt::format,
+    time::Duration,
 };
 
 use chrono::prelude::*;
@@ -28,16 +29,16 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const MESSAGE_MAX_LENGTH: u8 = 64;
-const MESSAGE_MAX_SIZE: usize = 512;
-//                                FPS
+const MESSAGE_MAX_LENGTH: u8 = 50;
+//                                    FPS
 const MIN_UI_FRAMETIME: i64 = ((1.0 / 60.0) * 1000.0) as i64;
+const MAX_UI_FRAMETIME: i64 = ((1.0 / 5.0) * 1000.0) as i64;
 
 struct Message {
     timestamp: i64,
     sender: String,
-    text: String,
-    style: i64, // to będzie trzeba zmienić na u8
+    style: MessageStyle,
+    text: String
 }
 struct Chat {
     log: Vec<Message>,
@@ -50,6 +51,15 @@ enum InputMode {
     System,
 }
 
+#[derive(FromPrimitive)]
+enum MessageStyle {
+    User = 0,
+    Yourself = 1,
+    Admin = 2,
+    Server = 3,
+    Client = 4
+}
+
 impl Default for Chat {
     fn default() -> Chat {
         Chat {
@@ -60,7 +70,62 @@ impl Default for Chat {
     }
 }
 
+fn parse_message(m: &Message) -> ListItem<'static> {
+    let name_style = match m.style {
+        MessageStyle::User => Style::default()
+            .fg(Color::Green),
+
+        MessageStyle::Yourself => Style::default()
+            .fg(Color::Yellow),
+
+        MessageStyle::Admin => Style::default()
+            .fg(Color::LightMagenta),
+
+        MessageStyle::Server => Style::default()
+            .bg(Color::Blue),
+
+        MessageStyle::Client => Style::default()
+            .bg(Color::White)
+    };
+
+    let text_style = match m.style {        
+        MessageStyle::Server => Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::BOLD),
+
+        MessageStyle::Client => Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+
+        _ => Style::default()
+            .fg(Color::White)
+    };
+
+    let date = Utc.timestamp(m.timestamp, 0)
+        .format("%H:%M ");
+
+    let content = Text::from(
+            Spans::from(
+                vec![
+                    Span::styled(date.to_string(),
+                        Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC)),
+                    Span::styled(format!("{}:", m.sender.clone()), name_style),
+                    Span::raw(" "),
+                    Span::styled(m.text.clone(), text_style)
+                ]
+            )
+        );
+    
+    ListItem::new(content)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    //let args: Vec<String> = env::args().collect();
+
+    //if args.len != 
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
 
@@ -160,47 +225,42 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
 
     let (tx, rx) = mpsc::channel::<String>();
     let mut last_ui_update: i64 = 0;
+    let mut do_ui_update: bool = true;
 
-    // glowny loop chatu
     loop {
 
         let now = Utc::now().timestamp_millis();
-        if (now - last_ui_update) > MIN_UI_FRAMETIME {
-            terminal.draw(|f| ui(f, &mut chat))?;
+        let delta_t = now - last_ui_update;
+
+        if (do_ui_update && delta_t > MIN_UI_FRAMETIME) || delta_t > MAX_UI_FRAMETIME {
+            terminal.draw(|f| draw_ui(f, &mut chat))?;
             last_ui_update = now;
+            do_ui_update = false;
         }
 
-        let mut buff: [u8; 2] = [0, 0];
+        let mut header: [u8; 2] = [0, 0];
 
-        if stream.read_exact(&mut buff).is_ok() {
-            let message_size = u16::from_be_bytes(buff);
-            /*let data = from_utf8(&buff)
-                .expect("Received invalid UTF-8")
-                .trim_matches(char::from(0));
-            let json_data: Value = from_str(data).expect("Received invalid data");
-            */
+        if stream.read_exact(&mut header).is_ok() {
+            let message_size = u16::from_be_bytes(header);
+            
             let mut message_bytes = vec![0_u8; message_size.into()];
-
+ 
             if stream.read_exact(&mut message_bytes).is_ok() {
                 let message_json = from_utf8(&message_bytes)
-                    .expect("Received invalid UTF-8")
-                    .trim_matches(char::from(0));
+                    .expect("Received invalid UTF-8");
                 
                 let json_data: Value = from_str(message_json)
                     .expect("Received invalid data");
 
-                let mut msg = Message {
+                let msg = Message {
                     timestamp: json_data["timestamp"].as_i64().unwrap(),
                     sender: json_data["sender"].as_str().unwrap().to_string(),
                     text: json_data["text"].as_str().unwrap().to_string(),
-                    style: json_data["style"].as_i64().unwrap(),
+                    style: num::FromPrimitive::from_i64(json_data["style"].as_i64().unwrap()).unwrap()         
                 };
-
-                if msg.sender.eq(username.trim()) {
-                    msg.style = 1;
-                }
-                //
+                
                 chat.log.push(msg);
+                do_ui_update = true;
             }
         }
         
@@ -238,13 +298,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
                                         timestamp: Utc::now().timestamp(),
                                         sender: "System".to_string(),
                                         text: "(E)xit, (Q)uit - closes app".to_string(),
-                                        style: 2,
+                                        style: MessageStyle::Client,
                                     }),
                                     _ => chat.log.push(Message {
                                         timestamp: Utc::now().timestamp(),
                                         sender: "System".to_string(),
                                         text: "Unknown command".to_string(),
-                                        style: 2,
+                                        style: MessageStyle::Client,
                                     }),
                                 }
                                 chat.input.clear();
@@ -252,7 +312,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
                         }
                     }
                     KeyCode::Char(c) => {
-                        if chat.input.chars().count() < 64 {
+                        if chat.input.chars().count() < MESSAGE_MAX_LENGTH.into() {
                             chat.input.push(c);
                         }
                     }
@@ -268,13 +328,14 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
                     }
                     _ => {}
                 }
+                do_ui_update = true;
             }
         }
 
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
+fn draw_ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
@@ -288,50 +349,31 @@ fn ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
         )
         .split(f.size());
 
-    let messages: Vec<ListItem> = chat
-        .log
-        .iter()
-        .enumerate()
-        .map(|(_, m)| {
-            let name_style = match m.style {
-                1 => Style::default().fg(Color::Yellow),
-                2 => Style::default().bg(Color::White),
-                3 => Style::default().bg(Color::Green),
-                _ => Style::default().fg(Color::Green),
-            };
-
-            let text_style = match m.style {
-                2 => Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-                3 => Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::White),
-            };
-
-            let naive = NaiveDateTime::from_timestamp(m.timestamp, 0);
-            let dt: DateTime<Utc> = DateTime::from_utc(naive, Utc);
-            let date = dt.format("%H:%M:%S");
-
-            let content = vec![Spans::from(vec![
-                Span::styled(
-                    format!("[{}] ", date),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled(format!("{}:", m.sender.clone()), name_style),
-                Span::styled(format!(" {}", m.text.clone()), text_style),
-            ])];
-            ListItem::new(content)
-        })
-        .collect();
-
-    let mut log_capacity = chunks[0].height - 2;
-    while chat.log.len() > log_capacity.into() {
-        chat.log.remove(0); // O(n)
+    if f.size().height < 24 || f.size().width < 80 {
+        f.render_widget(Paragraph::new(Text::styled(
+                                    "Please resize terminal to at \nleast 80 columns and 24 rows ", 
+                                    Style::default()
+                                    .bg(Color::Red)
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD)
+                                    )), chunks[0]);
+        return;
     }
+
+    let messages: Vec<ListItem>;
+    
+    let display_capacity = (chunks[0].height - 2) as usize;
+    while chat.log.len() > display_capacity {
+        chat.log.remove(0);
+    }
+
+    messages = 
+            chat.log
+            .iter()
+            .enumerate()
+            .map(|(_, m)| {
+                parse_message(m)
+            }).collect();
 
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Chat log"));
@@ -339,9 +381,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
 
     let (msg, style) = (
         vec![
-            Span::raw("Press "),
+            Span::raw(""),
             Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" to switch between command and chatting mode. Type "),
+            Span::raw(" - switch modes. Type "),
             Span::styled("\"?\"", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" in command mode for help."),
         ],
@@ -355,7 +397,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
     let input = Paragraph::new(chat.input.as_ref())
         .style(match chat.input_mode {
             InputMode::Chatting => Style::default(),
-            InputMode::System => Style::default().fg(Color::LightYellow),
+            InputMode::System => Style::default().fg(Color::LightMagenta),
         })
         .block(
             Block::default()
