@@ -1,6 +1,6 @@
 use colored::Colorize;
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, read},
     execute,
     style::Stylize,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -19,20 +19,10 @@ use std::{
 };
 
 use chrono::prelude::*;
-use tui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame, Terminal,
-};
-use unicode_width::UnicodeWidthStr;
 
-const MESSAGE_MAX_LENGTH: u8 = 50;
+const MESSAGE_MAX_LENGTH: usize = 256;
 //                                    FPS
-const MIN_UI_FRAMETIME: i64 = ((1.0 / 60.0) * 1000.0) as i64;
-const MAX_UI_FRAMETIME: i64 = ((1.0 / 5.0) * 1000.0) as i64;
+const MIN_UI_FRAMETIME: i64 = ((1.0 / 24.0) * 1000.0) as i64;
 
 struct Message {
     timestamp: i64,
@@ -40,6 +30,12 @@ struct Message {
     style: MessageStyle,
     text: String
 }
+
+struct Client {
+    username: String,
+    stream: TcpStream
+}
+
 struct Chat {
     log: Vec<Message>,
     input: String,
@@ -70,113 +66,80 @@ impl Default for Chat {
     }
 }
 
-fn parse_message(m: &Message) -> ListItem<'static> {
-    let name_style = match m.style {
-        MessageStyle::User => Style::default()
-            .fg(Color::Green),
+fn parse_message(m: &Message) -> String {
+    let mut sender = m.sender.clone();
+    let mut text = m.text.clone();
 
-        MessageStyle::Yourself => Style::default()
-            .fg(Color::Yellow),
-
-        MessageStyle::Admin => Style::default()
-            .fg(Color::LightMagenta),
-
-        MessageStyle::Server => Style::default()
-            .bg(Color::Blue),
-
-        MessageStyle::Client => Style::default()
-            .bg(Color::White)
+    match m.style {
+        MessageStyle::User => {
+            sender = sender.green().to_string();
+            text = text.white().to_string();
+        }
+        MessageStyle::Yourself => {
+            sender = sender.yellow().to_string();
+            text = text.white().to_string();
+        }
+        MessageStyle::Admin => {
+            sender = sender.magenta().to_string();
+            text = text.white().to_string();
+        }
+        MessageStyle::Server => {
+            sender = sender.on_blue().to_string();
+            text = text.blue().to_string();
+        }
+        MessageStyle::Client => {
+            sender = sender.on_white().to_string();
+            text = text.white().bold().to_string();
+        }
     };
 
-    let text_style = match m.style {        
-        MessageStyle::Server => Style::default()
-            .fg(Color::Blue)
-            .add_modifier(Modifier::BOLD),
-
-        MessageStyle::Client => Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-
-        _ => Style::default()
-            .fg(Color::White)
-    };
-
-    let date = Utc.timestamp(m.timestamp, 0)
-        .format("%H:%M ");
-
-    let content = Text::from(
-            Spans::from(
-                vec![
-                    Span::styled(date.to_string(),
-                        Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC)),
-                    Span::styled(format!("{}:", m.sender.clone()), name_style),
-                    Span::raw(" "),
-                    Span::styled(m.text.clone(), text_style)
-                ]
-            )
+    return format!(
+        "[{}] {}: {}",
+        Utc.timestamp(m.timestamp, 0).format("%H:%M").to_string().grey().italic(),
+        sender,
+        text
         );
-    
-    ListItem::new(content)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    //let args: Vec<String> = env::args().collect();
-
-    //if args.len != 
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let app = Chat::default();
-    let out = run_app(&mut terminal, app);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-
-    terminal.show_cursor()?;
-
-    match out {
-        Ok(msg) => println!("{}", msg),
-        Err(err) => println!("{:?}", err),
-    }
-
-    Ok(())
-}
-
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result<String> {
+fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
-        return Ok("Too few arguments, usage: <server address> <username>".to_string());
+    if args.len() != 3 {
+        eprint!("Usage: <server address>:<port> <username>");
+        return ;
     }
 
     let address = &args[1];
     let username = &mut args[2].clone();
-    username.push('\n'); // potrzebujemy tego newlina zeby serwer poprawie odebral username
+    username.push('\n');
 
     if !(3..16).contains(&username.chars().count()) {
-        return Ok(
-            "Username must be at least 3 and at most 16 characters long (2nd argument)".to_string(),
-        );
+        eprint!("Username must be no longer than 16 and no shorter than 3");
+        return ;
     }
+
+    enable_raw_mode();
+    let mut stdout = io::stdout();
+
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+
+    let app = Chat::default();
+    match run_app(app, address.to_string(), username.to_string()) {
+        Ok(r) => {
+            println!("{}", r);
+        },
+        Err(e) => {
+            eprint!("Error occured: {}", e)
+        }
+    } 
+}
+
+fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<String> {
+    let args: Vec<String> = env::args().collect();
 
     let mut stream = match TcpStream::connect(address) {
         Ok(s) => s,
-        Err(e) => {
-            return Ok(format!("Unable to connect with server\n{}", e)
-                .yellow()
-                .to_string())
-        }
+        Err(e) => { return Err(e); }
     };
 
     let mut data = [0_u8; 5];
@@ -232,8 +195,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
         let now = Utc::now().timestamp_millis();
         let delta_t = now - last_ui_update;
 
-        if (do_ui_update && delta_t > MIN_UI_FRAMETIME) || delta_t > MAX_UI_FRAMETIME {
-            terminal.draw(|f| draw_ui(f, &mut chat))?;
+        if do_ui_update && delta_t > MIN_UI_FRAMETIME {
+            draw(&mut chat);
             last_ui_update = now;
             do_ui_update = false;
         }
@@ -312,7 +275,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
                         }
                     }
                     KeyCode::Char(c) => {
-                        if chat.input.chars().count() < MESSAGE_MAX_LENGTH.into() {
+                        if chat.input.chars().count() < MESSAGE_MAX_LENGTH {
                             chat.input.push(c);
                         }
                     }
@@ -335,87 +298,37 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut chat: Chat) -> io::Result
     }
 }
 
-fn draw_ui<B: Backend>(f: &mut Frame<B>, chat: &mut Chat) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(2)
-        .constraints(
-            [
-                Constraint::Min(1),
-                Constraint::Length(1),
-                Constraint::Length(3),
-            ]
-            .as_ref(),
-        )
-        .split(f.size());
+fn draw(chat: &mut Chat) {
+    let input_label = match chat.input_mode {
+        InputMode::Chatting => "CHAT>".to_string().on_white(), 
+        InputMode::System => "COMMAND>".to_string().on_magenta(), 
+    };
 
-    if f.size().height < 24 || f.size().width < 80 {
-        f.render_widget(Paragraph::new(Text::styled(
-                                    "Please resize terminal to at \nleast 80 columns and 24 rows ", 
-                                    Style::default()
-                                    .bg(Color::Red)
-                                    .fg(Color::White)
-                                    .add_modifier(Modifier::BOLD)
-                                    )), chunks[0]);
-        return;
+    let messages = chat.log.drain(..).rev();
+    let terminal_width = crossterm::terminal::size().unwrap().0.into();
+    // line_capacity is how much characters we can display in input line,
+    // -1 because there is 1-chat wide space between Label and actual input text 
+    let line_capacity = terminal_width - input_label.content().chars().count() - 1;
+
+    print!("\r{}\r", " ".repeat(terminal_width));
+
+    if messages.len() > 0 {
+        for m in messages {
+            print!("{}\n\r", parse_message(&m));
+        }
+    } 
+
+    let mut input_line = chat.input.clone();
+    let input_length = input_line.chars().count();
+
+    if input_length > line_capacity {
+        input_line = input_line.split_at(input_length-line_capacity).1.to_string();
     }
 
-    let messages: Vec<ListItem>;
-    
-    let display_capacity = (chunks[0].height - 2) as usize;
-    while chat.log.len() > display_capacity {
-        chat.log.remove(0);
+    if input_length >= MESSAGE_MAX_LENGTH {
+        input_line = input_line.red().to_string();
     }
 
-    messages = 
-            chat.log
-            .iter()
-            .enumerate()
-            .map(|(_, m)| {
-                parse_message(m)
-            }).collect();
-
-    let messages =
-        List::new(messages).block(Block::default().borders(Borders::ALL).title("Chat log"));
-    f.render_widget(messages, chunks[0]);
-
-    let (msg, style) = (
-        vec![
-            Span::raw(""),
-            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" - switch modes. Type "),
-            Span::styled("\"?\"", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" in command mode for help."),
-        ],
-        Style::default(),
-    );
-    let mut text = Text::from(Spans::from(msg));
-    text.patch_style(style);
-    let help_message = Paragraph::new(text);
-    f.render_widget(help_message, chunks[1]);
-
-    let input = Paragraph::new(chat.input.as_ref())
-        .style(match chat.input_mode {
-            InputMode::Chatting => Style::default(),
-            InputMode::System => Style::default().fg(Color::LightMagenta),
-        })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(match chat.input_mode {
-                    InputMode::Chatting => format!(
-                        "Chat ({}/{})",
-                        chat.input.chars().count(),
-                        MESSAGE_MAX_LENGTH
-                    ),
-                    InputMode::System => "Command".to_string(),
-                }),
-        );
-    f.render_widget(input, chunks[2]);
-    f.set_cursor(
-        // Put cursor past the end of the input text
-        chunks[1].x + chat.input.width() as u16 + 1,
-        // Move one line down, from the border to the input line
-        chunks[1].y + 2,
-    )
+    print!("{} {}", input_label, input_line);
+    io::stdout().flush().unwrap();
 }
