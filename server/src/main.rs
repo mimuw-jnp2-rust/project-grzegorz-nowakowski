@@ -5,6 +5,7 @@ use serde_json::*;
 use tokio::time::timeout;
 use std::collections::HashMap;
 use std::env;
+use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,6 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 //use openssl::rsa::*; TODO szyfrowanie
 
+type Channels = Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>;
 type Db = Arc<Mutex<HashMap<String, SocketAddr>>>;
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,21 @@ async fn send_message(data: Message, s: &mut WriteHalf<'_>) {
         .unwrap();   
 }
 
+fn add_to_channel(channels: &mut HashMap<String, Vec<SocketAddr>>, channel: String, client: SocketAddr) {
+    match channels.contains_key(channel.as_str()) {
+        true => {
+            println!("Użytkownik {} dołączył do pokoju {}", &client, &channel);
+
+            channels.get_mut(channel.as_str()).unwrap().push(client);
+        }
+        false => {
+            println!("Dodaję nowy pokój {}", &channel);
+
+            channels.insert(channel, vec![client]);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();
@@ -83,6 +100,7 @@ async fn main() {
     host.push_str(&args[1]);
     let listener = TcpListener::bind(host).await.unwrap();
 
+    let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
 
     let (tx, _rx) = broadcast::channel(10);
@@ -90,6 +108,7 @@ async fn main() {
     loop {
         let (mut socket, addr) = listener.accept().await.unwrap();
 
+        let mut channels = channels.clone();
         let db = db.clone();
         let tx = tx.clone();
         let mut rx = tx.subscribe();
@@ -106,6 +125,9 @@ async fn main() {
                 .write_all(MessageType::Hello.as_str().as_bytes())
                 .await
                 .unwrap();
+
+            let mut channels = channels.lock().await;
+            add_to_channel(&mut *channels, String::from("testowy"), addr);
 
             match reader.read_line(&mut line).await.unwrap() {
                 0 => return,
