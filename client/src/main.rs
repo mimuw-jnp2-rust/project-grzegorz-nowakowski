@@ -66,6 +66,30 @@ impl Default for Chat {
     }
 }
 
+fn recv_json(s: &mut TcpStream) -> Option<Value> {
+    let mut header: [u8; 2] = [0, 0];
+    if s.read_exact(&mut header).is_ok() {
+        let message_size = u16::from_be_bytes(header);
+        
+        let mut message_bytes = vec![0_u8; message_size.into()];
+
+        if s.read_exact(&mut message_bytes).is_ok() {
+            let message_json = from_utf8(&message_bytes).unwrap();
+            
+            let json_data: Value = from_str(message_json).unwrap();
+             
+            Some(json_data)
+
+        } else {
+            None
+        }
+
+    } else {
+        None
+    }
+
+}
+
 fn parse_message(m: &Message) -> String {
     let mut sender = m.sender.clone();
     let mut text = m.text.clone();
@@ -201,13 +225,30 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
             do_ui_update = false;
         }
 
+        match recv_json(&mut stream) {
+            Some(data) => {
+                let msg = Message {
+                    timestamp: data["timestamp"].as_i64().unwrap(),
+                    sender: data["sender"].as_str().unwrap().to_string(),
+                    text: data["text"].as_str().unwrap().to_string(),
+                    style: num::FromPrimitive::from_i64(data["style"].as_i64().unwrap()).unwrap()         
+                };
+
+                chat.log.push(msg);
+                do_ui_update = true;
+            },
+            None => {},
+        }
+
+        /*
+
         let mut header: [u8; 2] = [0, 0];
 
         if stream.read_exact(&mut header).is_ok() {
             let message_size = u16::from_be_bytes(header);
             
             let mut message_bytes = vec![0_u8; message_size.into()];
- 
+            
             if stream.read_exact(&mut message_bytes).is_ok() {
                 let message_json = from_utf8(&message_bytes)
                     .expect("Received invalid UTF-8");
@@ -226,6 +267,8 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
                 do_ui_update = true;
             }
         }
+
+        */
         
         match rx.try_recv() {
             Ok(mut data) => {
