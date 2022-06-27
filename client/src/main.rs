@@ -147,7 +147,6 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
         "username": username
     }), &mut stream);
 
-
     ////////
 
     match receive_json(&mut stream) {

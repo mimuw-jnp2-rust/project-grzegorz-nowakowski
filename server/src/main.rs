@@ -13,8 +13,6 @@ use colored::Colorize;
 
 pub mod networking;
 
-
-
 type Db = Arc<Mutex<HashMap<String, SocketAddr>>>;
 
 #[derive(Debug, Clone)]
@@ -100,13 +98,15 @@ async fn main() {
                             "result": "ok",
                             "reason": "Welcome back"
                             }), &mut writer)
-                            .await
+                            .await;
+                            println!("{} {}", username.as_str(), "re-joined server".blue());
                     } else {
                         send_json(json!({
                             "result": "no",
                             "reason": "Username already taken"
                             }), &mut writer)
                             .await;
+                            println!("{} {}", "Someone tried to join server as ".bright_red(), username.as_str());
                     }
             } else {
                 send_json(json!({
@@ -125,6 +125,7 @@ async fn main() {
                     };
 
                     tx.send((message, addr)).unwrap();
+                    println!("{} {}", username.as_str(), "joined server".blue());
             }
             
             // we need to drop mutex guard manually beacuse scope is still alive
