@@ -263,10 +263,11 @@ dependencies = [
  "num-derive",
  "num-traits",
  "serde_json",
+ "utils",
 ]
 
 [[package]]
-name = "jnp-chat-project"
+name = "jnp-chat-server"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -275,6 +276,7 @@ dependencies = [
  "mini-redis",
  "serde_json",
  "tokio",
+ "utils",
 ]
 
 [[package]]
@@ -890,6 +892,13 @@ name = "unicode-width"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ed742d4ea2bd1176e236172c8429aaf54486e7ac098db29ffe6529e0ce50973"
+
+[[package]]
+name = "utils"
+version = "0.1.0"
+dependencies = [
+ "num-derive",
+]
 
 [[package]]
 name = "valuable"
