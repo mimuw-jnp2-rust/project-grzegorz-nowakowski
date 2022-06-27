@@ -10,3 +10,4 @@ path = "src/utils.rs"
 
 [dependencies]
 num-derive = "0.3"
+num-traits = "0.2"
