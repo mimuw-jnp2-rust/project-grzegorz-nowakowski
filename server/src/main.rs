@@ -1,5 +1,4 @@
 use chrono::*;
-use utils::{MessageStyle, Message};
 use colored::Colorize;
 use futures::lock::Mutex;
 use networking::*;
@@ -11,6 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast::{self};
+use utils::{Message, MessageStyle};
 
 pub mod networking;
 

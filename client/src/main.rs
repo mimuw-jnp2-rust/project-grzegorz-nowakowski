@@ -15,9 +15,8 @@ use std::{
 
 use chrono::prelude::*;
 use networking::*;
-use num_derive::FromPrimitive;
 use serde_json::*;
-use utils::{MessageStyle, Message};
+use utils::{Message, MessageStyle};
 
 pub mod networking;
 
@@ -87,8 +86,8 @@ fn parse_message(m: &Message) -> String {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 4 {
-        eprintln!("Usage: <server address>:<port> <username> <room>");
+    if args.len() != 3 {
+        eprintln!("Usage: <server address>:<port> <username>");
         return;
     }
 
@@ -140,7 +139,7 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
         },
         None => {
             return Ok("Server failed to respond".to_string());
-        },
+        }
     }
 
     stream
@@ -192,33 +191,32 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
         if poll(Duration::from_millis(0)).unwrap() {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Enter => {
-                        match chat.input_mode {
-                            InputMode::Chatting => {
-                                tx.send(chat.input.drain(..).collect()).expect("Error during send");
-                            }
-                            InputMode::System => {
-                                match chat.input.to_lowercase().as_str() {
-                                    "exit" | "e" | "quit" | "q" => {
-                                        return Ok("Bye".to_string());
-                                    }
-                                    "help" | "?" => chat.log.push(Message {
-                                        timestamp: Utc::now().timestamp(),
-                                        sender: "System".to_string(),
-                                        text: "(E)xit, (Q)uit - closes app".to_string(),
-                                        style: MessageStyle::Client,
-                                    }),
-                                    _ => chat.log.push(Message {
-                                        timestamp: Utc::now().timestamp(),
-                                        sender: "System".to_string(),
-                                        text: "Unknown command".to_string(),
-                                        style: MessageStyle::Client,
-                                    }),
-                                }
-                                chat.input.clear();
-                            }
+                    KeyCode::Enter => match chat.input_mode {
+                        InputMode::Chatting => {
+                            tx.send(chat.input.drain(..).collect())
+                                .expect("Error during send");
                         }
-                    }
+                        InputMode::System => {
+                            match chat.input.to_lowercase().as_str() {
+                                "exit" | "e" | "quit" | "q" => {
+                                    return Ok("Bye".to_string());
+                                }
+                                "help" | "?" => chat.log.push(Message {
+                                    timestamp: Utc::now().timestamp(),
+                                    sender: "System".to_string(),
+                                    text: "(E)xit, (Q)uit - closes app".to_string(),
+                                    style: MessageStyle::Client,
+                                }),
+                                _ => chat.log.push(Message {
+                                    timestamp: Utc::now().timestamp(),
+                                    sender: "System".to_string(),
+                                    text: "Unknown command".to_string(),
+                                    style: MessageStyle::Client,
+                                }),
+                            }
+                            chat.input.clear();
+                        }
+                    },
                     KeyCode::Char(c) => {
                         if chat.input.chars().count() < MESSAGE_MAX_LENGTH {
                             chat.input.push(c);
