@@ -149,7 +149,7 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
 
 
     ////////
-    eprint!("kupsko");
+
     match receive_json(&mut stream) {
         Some(v) => {
             match v["result"].as_str().unwrap() {
