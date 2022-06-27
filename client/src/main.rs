@@ -1,39 +1,35 @@
-use colored::Colorize;
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, read},
+    event::{self, poll, EnableMouseCapture, Event, KeyCode},
     execute,
     style::Stylize,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{enable_raw_mode},
 };
+
 use num_derive::FromPrimitive;
-use serde_json::{from_str, Value};
+use serde_json::*;
 
 use std::{
     env,
-    error::Error,
-    io::{self, Read, Write},
+    io::{self, Write},
     net::*,
-    str::from_utf8,
     sync::mpsc::{self, TryRecvError},
     time::Duration,
 };
 
 use chrono::prelude::*;
 
+pub mod networking;
+
+use networking::*;
+
 const MESSAGE_MAX_LENGTH: usize = 256;
-//                                    FPS
-const MIN_UI_FRAMETIME: i64 = ((1.0 / 24.0) * 1000.0) as i64;
+const MIN_FRAMETIME: i64 = ((1.0 / 24.0) * 1000.0) as i64;
 
 struct Message {
     timestamp: i64,
     sender: String,
     style: MessageStyle,
     text: String
-}
-
-struct Client {
-    username: String,
-    stream: TcpStream
 }
 
 struct Chat {
@@ -64,30 +60,6 @@ impl Default for Chat {
             input_mode: InputMode::Chatting,
         }
     }
-}
-
-fn recv_json(s: &mut TcpStream) -> Option<Value> {
-    let mut header: [u8; 2] = [0, 0];
-    if s.read_exact(&mut header).is_ok() {
-        let message_size = u16::from_be_bytes(header);
-        
-        let mut message_bytes = vec![0_u8; message_size.into()];
-
-        if s.read_exact(&mut message_bytes).is_ok() {
-            let message_json = from_utf8(&message_bytes).unwrap();
-            
-            let json_data: Value = from_str(message_json).unwrap();
-             
-            Some(json_data)
-
-        } else {
-            None
-        }
-
-    } else {
-        None
-    }
-
 }
 
 fn parse_message(m: &Message) -> String {
@@ -126,26 +98,30 @@ fn parse_message(m: &Message) -> String {
 }
 
 fn main() {
+    
+
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 3 {
-        eprint!("Usage: <server address>:<port> <username>");
+    if args.len() != 4 {
+        eprint!("Usage: <server address>:<port> <username> <room>");
         return ;
     }
 
     let address = &args[1];
     let username = &mut args[2].clone();
-    username.push('\n');
+
 
     if !(3..16).contains(&username.chars().count()) {
         eprint!("Username must be no longer than 16 and no shorter than 3");
         return ;
     }
 
-    enable_raw_mode();
+    enable_raw_mode()
+        .expect("Crossterm: Failed to enable raw mode");
     let mut stdout = io::stdout();
 
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+    execute!(stdout, EnableMouseCapture)
+        .expect("Crossterm: Failed to execute command preset");
 
     let app = Chat::default();
     match run_app(app, address.to_string(), username.to_string()) {
@@ -159,52 +135,39 @@ fn main() {
 }
 
 fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<String> {
-    let args: Vec<String> = env::args().collect();
 
     let mut stream = match TcpStream::connect(address) {
         Ok(s) => s,
         Err(e) => { return Err(e); }
     };
 
-    let mut data = [0_u8; 5];
-    match stream.read_exact(&mut data) {
-        Ok(_) => {
-            if &data != b"HELLO" {
-                return Ok(
-                    "Invalid server response (version mismatch? contact with server admin)"
-                        .to_string()
-                        .red()
-                        .to_string(),
-                );
-            }
-        }
-        Err(e) => return Ok(format!("Server failed to respond\n{}", e).red().to_string()),
-    }
+    ////////
 
-    stream
-        .write_all(username.as_bytes())
-        .expect("Couldn't send data to server");
+    send_json(json!({
+        "username": username
+    }), &mut stream);
 
-    let mut data = [0_u8; 10];
-    match stream.read_exact(&mut data) {
-        Ok(_) => match &data {
-            b"HELLOAGAIN" | b"HINEWCOMER" => (),
-            b"USEREXISTS" => {
-                return Ok(format!("Username \"{}\" is already in use", username)
-                    .purple()
-                    .to_string())
-            }
-            _ => {
-                return Ok(
-                    "Invalid server response (version mismatch? contact with server admin)"
-                        .to_string()
-                        .red()
-                        .to_string(),
-                )
+
+    ////////
+    eprint!("kupsko");
+    match receive_json(&mut stream) {
+        Some(v) => {
+            match v["result"].as_str().unwrap() {
+                "ok" => {
+                    println!("{}", "Successfully joined chat".on_green());
+                },
+                "no" => {
+                   return Ok(v["reason"].as_str().unwrap().to_string());
+                },
+                _ => {
+                    return Ok("Unexpected server response".to_string());
+                }
             }
         },
-        Err(e) => return Ok(format!("Server failed to respond\n{}", e).red().to_string()),
+        None => todo!(),
     }
+
+    ///////
 
     stream
         .set_nonblocking(true)
@@ -219,13 +182,13 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
         let now = Utc::now().timestamp_millis();
         let delta_t = now - last_ui_update;
 
-        if do_ui_update && delta_t > MIN_UI_FRAMETIME {
+        if do_ui_update && delta_t > MIN_FRAMETIME {
             draw(&mut chat);
             last_ui_update = now;
             do_ui_update = false;
         }
 
-        match recv_json(&mut stream) {
+        match receive_json(&mut stream) {
             Some(data) => {
                 let msg = Message {
                     timestamp: data["timestamp"].as_i64().unwrap(),
@@ -239,36 +202,6 @@ fn run_app(mut chat: Chat, address: String, username: String) -> io::Result<Stri
             },
             None => {},
         }
-
-        /*
-
-        let mut header: [u8; 2] = [0, 0];
-
-        if stream.read_exact(&mut header).is_ok() {
-            let message_size = u16::from_be_bytes(header);
-            
-            let mut message_bytes = vec![0_u8; message_size.into()];
-            
-            if stream.read_exact(&mut message_bytes).is_ok() {
-                let message_json = from_utf8(&message_bytes)
-                    .expect("Received invalid UTF-8");
-                
-                let json_data: Value = from_str(message_json)
-                    .expect("Received invalid data");
-
-                let msg = Message {
-                    timestamp: json_data["timestamp"].as_i64().unwrap(),
-                    sender: json_data["sender"].as_str().unwrap().to_string(),
-                    text: json_data["text"].as_str().unwrap().to_string(),
-                    style: num::FromPrimitive::from_i64(json_data["style"].as_i64().unwrap()).unwrap()         
-                };
-                
-                chat.log.push(msg);
-                do_ui_update = true;
-            }
-        }
-
-        */
         
         match rx.try_recv() {
             Ok(mut data) => {

@@ -1,90 +1,36 @@
 use chrono::*;
-use colored::Colorize;
 use futures::lock::Mutex;
+use networking::*;
 use serde_json::*;
-use tokio::time::timeout;
 use std::collections::HashMap;
 use std::env;
-use std::hash::Hash;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::WriteHalf;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
-//use openssl::rsa::*; TODO szyfrowanie
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::{TcpListener};
+use tokio::sync::broadcast::{self};
+use colored::Colorize;
 
-type Channels = Arc<Mutex<HashMap<String, Vec<SocketAddr>>>>;
+pub mod networking;
+
+
+
 type Db = Arc<Mutex<HashMap<String, SocketAddr>>>;
 
 #[derive(Debug, Clone)]
 enum MessageStyle {
     User = 0,
     Yourself = 1,
-    Admin = 2,
+    //Admin = 2,
     Server = 3,
 }
 
 #[derive(Debug, Clone)]
-struct Message {
+pub struct Message {
     timestamp: i64,
     sender: String,
     style: MessageStyle,
     text: String,
-}
-
-enum MessageType {
-    Hello = 0,
-    HelloAgain = 1,
-    UserExists = 2,
-    HiNewComer = 3,
-}
-
-impl MessageType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            MessageType::Hello => "HELLO",
-            MessageType::HelloAgain => "HELLOAGAIN",
-            MessageType::UserExists => "USEREXISTS",
-            MessageType::HiNewComer => "HINEWCOMER",
-        }
-    }
-}
-
-async fn send_message(data: Message, s: &mut WriteHalf<'_>) {
-    let data_json = json!({
-        "timestamp": data.timestamp,
-        "sender": data.sender,
-        "style": data.style as u8,
-        "text": data.text
-    })
-    .to_string();
-
-    if data_json.len() > 65535 {
-        println!("Wiadomość za długa");
-        return;
-        // todo - need better handling 
-    }
-
-    let header: [u8; 2] = (data_json.len() as u16).to_be_bytes();
-    s.write_all(&[&header, data_json.as_bytes()].concat())
-        .await
-        .unwrap();   
-}
-
-fn add_to_channel(channels: &mut HashMap<String, Vec<SocketAddr>>, channel: String, client: SocketAddr) {
-    match channels.contains_key(channel.as_str()) {
-        true => {
-            println!("Użytkownik {} dołączył do pokoju {}", &client, &channel);
-
-            channels.get_mut(channel.as_str()).unwrap().push(client);
-        }
-        false => {
-            println!("Dodaję nowy pokój {}", &channel);
-
-            channels.insert(channel, vec![client]);
-        }
-    }
 }
 
 #[tokio::main]
@@ -92,119 +38,113 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
-        println!("Usage: <port>");
+        println!("Usage: <ip:port>");
         return;
     }
 
-    let mut host: String = "localhost:".to_owned();
-    host.push_str(&args[1]);
-    let listener = TcpListener::bind(host).await.unwrap();
+    println!("{} {}", 
+        "Starting server on".bold(),
+        &args[1].to_string().italic()
+        );
 
-    let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
+    let listener;
+    match TcpListener::bind(&args[1]).await {
+        Ok(n) => {
+            println!("{}", "Server up and running... ".green());
+            listener = n;
+        },
+        Err(e) => {
+            eprint!("{}\n{}",
+                "Failed to start server, reason:".red(),
+                e.to_string().italic()
+                );
+            return;
+        }
+    }
+
     let db: Db = Arc::new(Mutex::new(HashMap::new()));
 
-    let (tx, _rx) = broadcast::channel(10);
+    let (tx, _) = broadcast::channel(64);
 
     loop {
         let (mut socket, addr) = listener.accept().await.unwrap();
-
-        let mut channels = channels.clone();
+        
         let db = db.clone();
         let tx = tx.clone();
         let mut rx = tx.subscribe();
-
+        
         tokio::spawn(async move {
             let (reader, mut writer) = socket.split();
 
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
-            let mut username: String = String::new();
+            let username;
 
-            // Dodaj nowego użytkownika.
-            writer
-                .write_all(MessageType::Hello.as_str().as_bytes())
-                .await
-                .unwrap();
-
-            let mut channels = channels.lock().await;
-            add_to_channel(&mut *channels, String::from("testowy"), addr);
-
-            match reader.read_line(&mut line).await.unwrap() {
-                0 => return,
-                _ => { // TODO - rewrite this section, client should pass all data in one batch
-                    let nick: String = line.clone().split_whitespace().collect();
-                    if nick.is_empty() {
-                        return;
-                    }
-                    let mut db = db.lock().await;
-                    match db.contains_key(nick.as_str()) {
-                        true => {
-                            if db.get(nick.as_str()).unwrap().ip() == addr.ip() {
-                                writer
-                                    .write_all(MessageType::HelloAgain.as_str().as_bytes())
-                                    .await
-                                    .unwrap();
-                                username = nick.to_string();
-                            } else {
-                                writer
-                                    .write_all(MessageType::UserExists.as_str().as_bytes())
-                                    .await
-                                    .unwrap();
-
-                                println!(
-                                    "{} {} {}",
-                                    format!("{:?}", addr).bold().red(),
-                                    "próbował połączyć się jako".to_string().red(),
-                                    format!("{:?}", nick.as_str()).bold().red(),
-                                );
-                                writer.shutdown().await.unwrap();
-                            }
-                        }
-                        false => {
-                            writer
-                                .write_all(MessageType::HiNewComer.as_str().as_bytes())
-                                .await
-                                .unwrap();
-
-                            println!(
-                                "{} {} {}",
-                                format!("{:?}", addr).bold().green(),
-                                "połączył się jako".to_string().green(),
-                                format!("{:?}", nick.as_str()).bold().green(),
-                            );
-
-                            db.insert(nick.to_string(), addr);
-                            username = nick.to_string();
-
-                            let message = Message {
-                                timestamp: Utc::now().timestamp(),
-                                sender: "Server".to_string(),
-                                style: MessageStyle::Server,
-                                text: [nick.as_str(), "joined chat"].join(" "),
-                            };
-                            tx.send((message, addr)).unwrap();
-                        }
-                    }
-                }
+            match receive_json(&mut reader).await {
+                Some(v) => {
+                    username = v["username"]
+                        .as_str()
+                        .expect("Failed to parse username")
+                        .to_string();
+                },
+                None => return,
             }
+
+            let mut db = db.lock().await;
+
+            if db.contains_key(&username) {
+                if db.get(&username)
+                    .expect("Failed to access user database")
+                    .ip() == addr.ip() {
+                        send_json(json!({
+                            "result": "ok",
+                            "reason": "Welcome back"
+                            }), &mut writer)
+                            .await
+                    } else {
+                        send_json(json!({
+                            "result": "no",
+                            "reason": "Username already taken"
+                            }), &mut writer)
+                            .await;
+                    }
+            } else {
+                send_json(json!({
+                    "result": "ok",
+                    "reason": "Welcome new user"
+                    }), &mut writer)
+                    .await;
+                    
+                    db.insert(username.to_string(), addr);
+                    
+                    let message = Message {
+                        timestamp: Utc::now().timestamp(),
+                        sender: "Server".to_string(),
+                        style: MessageStyle::Server,
+                        text: [username.as_str(), "joined chat"].join(" "),
+                    };
+
+                    tx.send((message, addr)).unwrap();
+            }
+            
+            // we need to drop mutex guard manually beacuse scope is still alive
+            drop(db); 
 
             line.clear();
 
-            // Obsługuj chatroom.
             loop {
                 tokio::select! {
                     result = reader.read_line(&mut line) => {
                         if result.unwrap() == 0 {
                             break;
                         }
-                        // Wysyłamy wiadomość jako JSON, który będzie odpowiednio formatowany przez klienta.
                         let message = Message {
                             timestamp: Utc::now().timestamp(),
                             sender: username.clone(),
                             style: MessageStyle::User,
                             text: line.clone().trim().to_string()
                         };
-
+                        
                         tx.send((message, addr))
                             .unwrap();
 
