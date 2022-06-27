@@ -10,7 +10,7 @@ Projekt aplikacji chatu napisanej w języku Rust, oparty o model komunikacji
 
 ## Funkcjonalności
 Serwer obsługuje wielu klientów jednocześnie. Po otrzymaniu wiadomości
-od klienta odpowiednią ją formatuje i rozsyła grupowo do pozostałych
+od klienta odpowiednio ją formatuje i rozsyła grupowo do pozostałych
 użytkowników. Wiadomości są przekazywane w formacie JSON.
 
 ## Biblioteki
