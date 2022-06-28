@@ -1,27 +1,26 @@
-# Frobnicator
+# Sendino
 
 ## Autorzy
-- Andrzej Głuszak (gr 9, @agluszak na githubie)
-- Linus Torvalds (Uniwersytet Helsiński, @torvalds na githubie)
+- Grzegorz Nowakowski
+- izmael7
 
 ## Opis
-Od zawsze chcieliśmy napisać grę komputerową.
-Frobnicator będzie to gra platformowa, w której chodzi o to, żeby...
+Projekt aplikacji chatu napisanej w języku Rust, oparty o model komunikacji
+`client-server`. Udostępnia jeden pokój do komunikacji dla wielu użytkowników.
 
-Z grubsza będziemy wzorować się na [tym tutorialu](https://dev.to/sbelzile/rust-platformer-part-1-bevy-and-ecs-2pci).
-
-## Funkcjonalność
-- Generowanie map
-- Strzelanie
-- AI dla wrogów (bardziej rozbudowane niż w tutorialu)
-- Możliwość zapisywania i wczytywania stanu gry
-- Punktacja
-
-## Propozycja podziału na części
-W pierwszej części stworzymy grę opartą na tutorialu (z lepszym AI) i jedną zahardcodowaną planszą.
-
-W drugiej części dodamy do tego losowy generator map, zapisywanie/wczytywanie stanu gry oraz system punktacji.
+## Funkcjonalności
+Serwer obsługuje wielu klientów jednocześnie. Po otrzymaniu wiadomości
+od klienta odpowiednio ją formatuje i rozsyła grupowo do pozostałych
+użytkowników. Wiadomości są przekazywane w formacie JSON.
 
 ## Biblioteki
-- Bevy
-- może coś do serializacji danych? (czy mógłby Pan coś polecić?)
+- tokio
+- serde_json
+- crossterm
+
+## Sposób użycia
+Uruchamianie serwera:
+`cargo run --bin jnp-chat-server <host>:<port>`
+
+Uruchamianie klienta:
+`cargo run --bin jnp-chat-client <host>:<port> <name>`
